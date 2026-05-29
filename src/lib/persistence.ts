@@ -1,10 +1,14 @@
 import { useStore } from "./store";
-import { parseTranscript } from "./parser";
-import { getExtension, getBaseName, getTextMimeType, createId } from "./utils";
 import { getAllSongsFromDb, storeSongInDb } from "./db";
 
-const STORAGE_KEYS = {
-    transcripts: "living-sketchbook:text-files" // remaining old stuff if any
+const SETTINGS_KEYS = {
+    elevenLabsApiKey: "living-sketchbook:elevenlabs-api-key",
+    saveElevenLabsKey: "living-sketchbook:elevenlabs-save-key",
+    sourceLanguage: "living-sketchbook:source-language",
+    targetLanguage: "living-sketchbook:target-language",
+    translationEnabled: "living-sketchbook:translation-enabled",
+    googleTranslateApiKey: "living-sketchbook:google-translate-api-key",
+    saveGoogleTranslateKey: "living-sketchbook:google-translate-save-key",
 };
 
 export async function persistLibrary() {
@@ -42,26 +46,51 @@ export async function restorePersistedLibrary() {
     }
 }
 
-export function saveSettings(model: string, apiKey: string, saveKey: boolean) {
+export function saveSettings(settings = useStore.getState()) {
     try {
-        if (saveKey) {
-            localStorage.setItem("living-sketchbook:gemini-api-key", apiKey);
+        if (settings.saveElevenLabsKey) {
+            localStorage.setItem(SETTINGS_KEYS.elevenLabsApiKey, settings.elevenLabsApiKey || "");
         } else {
-            localStorage.removeItem("living-sketchbook:gemini-api-key");
+            localStorage.removeItem(SETTINGS_KEYS.elevenLabsApiKey);
         }
-        localStorage.setItem("living-sketchbook:gemini-save-key", saveKey ? "true" : "false");
-        localStorage.setItem("living-sketchbook:gemini-model", model);
+
+        if (settings.saveGoogleTranslateKey) {
+            localStorage.setItem(SETTINGS_KEYS.googleTranslateApiKey, settings.googleTranslateApiKey || "");
+        } else {
+            localStorage.removeItem(SETTINGS_KEYS.googleTranslateApiKey);
+        }
+
+        localStorage.setItem(SETTINGS_KEYS.saveElevenLabsKey, settings.saveElevenLabsKey ? "true" : "false");
+        localStorage.setItem(SETTINGS_KEYS.sourceLanguage, settings.sourceLanguage || "");
+        localStorage.setItem(SETTINGS_KEYS.targetLanguage, settings.targetLanguage || "en");
+        localStorage.setItem(SETTINGS_KEYS.translationEnabled, settings.translationEnabled ? "true" : "false");
+        localStorage.setItem(SETTINGS_KEYS.saveGoogleTranslateKey, settings.saveGoogleTranslateKey ? "true" : "false");
     } catch(e) {}
 }
 
 export function loadSettings() {
     try {
+        const saveElevenLabsKey = localStorage.getItem(SETTINGS_KEYS.saveElevenLabsKey) === "true";
+        const saveGoogleTranslateKey = localStorage.getItem(SETTINGS_KEYS.saveGoogleTranslateKey) === "true";
+
         return {
-            apiKey: localStorage.getItem("living-sketchbook:gemini-api-key") || "",
-            saveKey: localStorage.getItem("living-sketchbook:gemini-save-key") === "true",
-            model: localStorage.getItem("living-sketchbook:gemini-model") || "gemini-3.1-pro-preview"
+            elevenLabsApiKey: saveElevenLabsKey ? localStorage.getItem(SETTINGS_KEYS.elevenLabsApiKey) || "" : "",
+            saveElevenLabsKey,
+            sourceLanguage: localStorage.getItem(SETTINGS_KEYS.sourceLanguage) || "",
+            targetLanguage: localStorage.getItem(SETTINGS_KEYS.targetLanguage) || "en",
+            translationEnabled: localStorage.getItem(SETTINGS_KEYS.translationEnabled) !== "false",
+            googleTranslateApiKey: saveGoogleTranslateKey ? localStorage.getItem(SETTINGS_KEYS.googleTranslateApiKey) || "" : "",
+            saveGoogleTranslateKey,
         };
     } catch(e) {
-        return { apiKey: "", saveKey: false, model: "gemini-3.1-pro-preview" };
+        return {
+            elevenLabsApiKey: "",
+            saveElevenLabsKey: false,
+            sourceLanguage: "",
+            targetLanguage: "en",
+            translationEnabled: true,
+            googleTranslateApiKey: "",
+            saveGoogleTranslateKey: false,
+        };
     }
 }

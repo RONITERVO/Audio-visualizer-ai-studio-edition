@@ -48,6 +48,11 @@ export interface Segment {
   speaker: string;
   section: string;
   role: string;
+  kind?: string;
   words: any[];
+  characterTimeline?: any[];
   order: number;
+  source?: string;
+  translationSource?: string;
+  language_code?: string;
 }

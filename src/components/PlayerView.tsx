@@ -178,6 +178,60 @@ export function PlayerView() {
       const visible = Math.max(1, Math.floor(text.length * progress));
       return text.slice(0, visible);
   };
+  const extractTimedText = (value: any): string => {
+      if (value == null) return "";
+      if (typeof value === "string") return value;
+      if (typeof value === "number" || typeof value === "boolean") return String(value);
+      if (Array.isArray(value)) return value.map(extractTimedText).join("");
+      if (typeof value === "object") {
+          return extractTimedText(value.text ?? value.word ?? value.character ?? value.char ?? value.value ?? value.grapheme ?? value.symbol ?? "");
+      }
+      return "";
+  };
+  const getSegmentPrimary = (segment: any) => String(segment?.primary || segment?.raw || "");
+  const getSegmentTranslation = (segment: any) => String(segment?.translation || segment?.secondary || "");
+  const getTimedCharacters = (word: any) => {
+      if (Array.isArray(word?.letters) && word.letters.length) return word.letters.map((char: any) => extractTimedText(char)).filter(Boolean);
+      if (Array.isArray(word?.characters) && word.characters.length) return word.characters.map((char: any) => extractTimedText(char)).filter(Boolean);
+      return Array.from(extractTimedText(word?.text ?? word?.word));
+  };
+  const appendLyricToken = (text: string, token: string) => {
+      const cleanToken = token.trim();
+      if (!cleanToken) return text;
+      if (!text) return cleanToken;
+      if (/^[,.;:!?%…)\]}]/.test(cleanToken)) return text + cleanToken;
+      if (/[¿¡([{\-]$/.test(text)) return text + cleanToken;
+      return `${text} ${cleanToken}`;
+  };
+  const revealTimedPrimary = (segment: any, time: number, fallbackProgress: number) => {
+      const fallback = getSegmentPrimary(segment);
+      const words = Array.isArray(segment?.words) ? segment.words : [];
+      const timedWords = words.filter((word: any) => Number.isFinite(Number(word?.start)) && Number.isFinite(Number(word?.end)));
+      if (!timedWords.length) return revealText(fallback, fallbackProgress);
+
+      let output = "";
+      for (const word of timedWords) {
+          const token = extractTimedText(word.text ?? word.word);
+          const start = Number(word.start);
+          const end = Number(word.end);
+          if (!token) continue;
+
+          if (time >= end) {
+              output = appendLyricToken(output, token);
+              continue;
+          }
+
+          if (time > start) {
+              const progress = clamp((time - start) / Math.max(0.001, end - start), 0, 1);
+              const characters = getTimedCharacters(word);
+              const visible = Math.max(1, Math.ceil(characters.length * progress));
+              output = appendLyricToken(output, characters.slice(0, visible).join(""));
+          }
+          break;
+      }
+
+      return output || revealText(fallback, fallbackProgress);
+  };
 
   const currentSegment = currentSegmentIndex >= 0 ? segments[currentSegmentIndex] : null;
 
@@ -192,20 +246,20 @@ export function PlayerView() {
       primaryProgress = easeOutCubic(clamp(progress / 0.82, 0, 1));
       translationProgress = easeOutCubic(clamp((progress - 0.24) / 0.66, 0, 1));
       
-      displayPrimary = revealText(currentSegment.primary, primaryProgress);
-      displayTranslation = revealText(currentSegment.translation || currentSegment.secondary || "", translationProgress);
+      displayPrimary = revealTimedPrimary(currentSegment, currentTime, primaryProgress);
+      displayTranslation = revealText(getSegmentTranslation(currentSegment), translationProgress);
   } else if (currentSegment) {
-      displayPrimary = currentSegment.primary;
-      displayTranslation = currentSegment.translation || currentSegment.secondary || "";
+      displayPrimary = getSegmentPrimary(currentSegment);
+      displayTranslation = getSegmentTranslation(currentSegment);
   } else {
       if (segments.length > 0) {
           const upcoming = segments.find(s => s.start >= currentTime);
           displayPrimary = upcoming ? "Instrumental" : "End of page";
-          displayTranslation = upcoming ? (upcoming.primary || "Waiting for the next line") : "";
+          displayTranslation = upcoming ? (getSegmentPrimary(upcoming) || "Waiting for the next line") : "";
           primaryProgress = 0.3; // Give it a fixed underline scale
       } else if (song?.url) {
           displayPrimary = cleanTitle(song.name);
-          displayTranslation = "Import a transcript for timed lyrics";
+          displayTranslation = "Generate synced subtitles for timed lyrics";
           primaryProgress = 0.55;
       }
   }

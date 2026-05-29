@@ -73,7 +73,7 @@ function pickAnchorSegmentIndex(tokens: any[], match: any) {
 function applyGuideOverlay(segment: any, guide: any) {
     const guidePrimary = (guide.primary || "").trim();
     const guideTranslation = (guide.translation || guide.secondary || "").trim();
-    if (guidePrimary) segment.primary = guidePrimary;
+    if (guidePrimary && !segment.primary) segment.primary = guidePrimary;
     if (guideTranslation) {
       segment.translation = mergeSupplementText(segment.translation, guideTranslation);
     }
@@ -131,11 +131,12 @@ function buildTimingTokens(segments: any[]) {
       if (/^(instrumental|section|music|silence|nonvocal|non-vocal)$/.test(segment.role || "")) continue;
       if (Array.isArray(segment.words) && segment.words.length) {
         for (const word of segment.words) {
-          const normalized = normalizeToken(word.word);
+          const originalWord = word.word ?? word.text ?? "";
+          const normalized = normalizeToken(originalWord);
           if (!normalized) continue;
           tokens.push({
             token: normalized,
-            original: word.word,
+            original: originalWord,
             start: Number.isFinite(word.start) ? word.start : segment.start,
             end: Number.isFinite(word.end) ? word.end : segment.end,
             segmentIndex

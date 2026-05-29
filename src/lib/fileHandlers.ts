@@ -2,7 +2,6 @@ import { useStore, GlobalState } from "./store";
 import { AUDIO_EXTENSIONS, TRANSCRIPT_EXTENSIONS } from "./fileSystem";
 import { getExtension, getBaseName, getAudioMimeType, getFileRelativePath, getTopFolderName, createId, getSongFileKey } from "./utils";
 import { parseTranscript } from "./parser";
-import { mergeGuideWithTiming } from "./merger";
 
 export async function handleGlobalDroppedFiles(files: File[]) {
     const audioFiles: File[] = [];
@@ -205,10 +204,6 @@ export async function loadSongSegments(songId: string) {
     }
 
     let finalSegments = timingSegments.length ? timingSegments : guideSegments;
-
-    if (timingSegments.length && guideSegments.length) {
-        finalSegments = mergeGuideWithTiming(guideSegments, timingSegments);
-    }
 
     // Distribute untimed segments
     let cursor = 0;

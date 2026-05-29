@@ -59,13 +59,29 @@ function parseJsonTranscript(text: string) {
 
     const segments = Array.isArray(data) ? data : data.segments || data.transcript || data.captions || [];
     if (segments.length) {
-        const parsed = segments.map((item: any) => ({
+        const parsed = segments.map((item: any, index: number) => {
+          const text = item.text || item.primary || item.content || item.lyric || item.raw || "";
+          return {
+            id: item.id,
             start: item.start ?? item.startTime ?? item.start_time,
             end: item.end ?? item.endTime ?? item.end_time,
-            text: item.text || item.content || item.lyric,
-            raw: item.text || item.content || item.lyric,
-            role: item.kind || item.role || ""
-        }));
+            text,
+            raw: item.raw || text,
+            primary: item.primary || text,
+            translation: item.translation || item.secondary || "",
+            secondary: item.secondary || "",
+            speaker: item.speaker || "",
+            section: item.section || "",
+            role: item.role || item.kind || "lyric",
+            kind: item.kind || item.role || "lyric",
+            words: Array.isArray(item.words) ? item.words : [],
+            characterTimeline: Array.isArray(item.characterTimeline) ? item.characterTimeline : [],
+            order: item.order ?? index,
+            source: item.source || data.source || data.transcriptionSource || "",
+            translationSource: item.translationSource || data.translationSource || "",
+            language_code: item.language_code || data.language_code || ""
+          };
+        });
         return { kind: "timed" as any, segments: normalizeSegments(parsed) };
     }
     
@@ -177,19 +193,26 @@ function parsePlainText(text: string) {
 function normalizeSegments(rawSegments: any[]): Segment[] {
     const segments = rawSegments.map((seg, i) => {
         const split = splitBilingualText(seg.text || seg.raw || "");
+        const start = Number(seg.start);
+        const end = Number(seg.end);
         return {
-            id: createId("seg"),
-            start: Number.isFinite(seg.start) ? Number(seg.start) : NaN,
-            end: Number.isFinite(seg.end) ? Number(seg.end) : NaN,
+            id: seg.id || createId("seg"),
+            start: Number.isFinite(start) ? start : NaN,
+            end: Number.isFinite(end) ? end : NaN,
             primary: seg.primary || split.primary || seg.text || "",
             translation: seg.translation || split.translation || "",
             secondary: seg.secondary || split.secondary || "",
             raw: seg.raw || seg.text || "",
             speaker: seg.speaker || "",
             section: seg.section || "",
-            role: seg.role || "lyric",
-            words: seg.words || [],
-            order: seg.order ?? i
+            role: seg.role || seg.kind || "lyric",
+            kind: seg.kind || seg.role || "lyric",
+            words: Array.isArray(seg.words) ? seg.words : [],
+            characterTimeline: Array.isArray(seg.characterTimeline) ? seg.characterTimeline : [],
+            order: seg.order ?? i,
+            source: seg.source || "",
+            translationSource: seg.translationSource || "",
+            language_code: seg.language_code || ""
         };
     }).filter((s) => s.primary || s.translation || s.raw)
       .sort((a, b) => {

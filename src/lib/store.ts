@@ -17,6 +17,13 @@ export interface GlobalState {
   segments: any[];
   currentSegmentIndex: number;
   model: string;
+  elevenLabsApiKey: string;
+  saveElevenLabsKey: boolean;
+  sourceLanguage: string;
+  targetLanguage: string;
+  translationEnabled: boolean;
+  googleTranslateApiKey: string;
+  saveGoogleTranslateKey: boolean;
 
   // Audio state
   audioContext: AudioContext | null;
@@ -46,6 +53,13 @@ export const useStore = create<GlobalState>((set) => ({
   segments: [],
   currentSegmentIndex: -1,
   model: "gemini-3.1-pro-preview",
+  elevenLabsApiKey: "",
+  saveElevenLabsKey: false,
+  sourceLanguage: "",
+  targetLanguage: "en",
+  translationEnabled: true,
+  googleTranslateApiKey: "",
+  saveGoogleTranslateKey: false,
   
   audioContext: null,
   analyser: null,
