@@ -296,17 +296,17 @@ export function PlayerView() {
             <span aria-hidden="true">{isPlaying ? "II" : ">"}</span>
           </button>
 
-          <div 
-            className="lyric-wrap absolute z-10 bottom-[140px] pointer-events-none text-center"
+          <div
+            className="lyric-wrap absolute z-10 bottom-[132px] pointer-events-none text-left"
             style={{ 
               left: "calc(max(50px, 4vw) + max(24px, 5vw))",
               right: "max(24px, 5vw)" 
             }}
           >
-            <div className={`lyric-primary font-display text-[clamp(2.5rem,5vw,6rem)] font-bold leading-tight text-ink-graphite ${primaryProgress > 0.12 ? 'underline-visible' : ''}`} style={{"--underline-scale": clamp(primaryProgress, 0, 1), "--underline-opacity": primaryProgress > 0.12 ? 1 : 0} as any}>
+            <div className={`lyric-primary max-w-[min(1180px,100%)] font-display text-[clamp(2.5rem,4.35vw,5.25rem)] font-bold leading-[0.98] text-left text-ink-graphite whitespace-normal break-words ${primaryProgress > 0.12 ? 'underline-visible' : ''}`} style={{"--underline-scale": clamp(primaryProgress, 0, 1), "--underline-opacity": primaryProgress > 0.12 ? 1 : 0} as any}>
                 {displayPrimary || " "}
             </div>
-            <div className="translation-wrap flex justify-center gap-2 text-ink-blueprint text-[clamp(1.5rem,3vh,2.5rem)]">
+            <div className="translation-wrap max-w-[min(1180px,100%)] flex justify-start gap-2 text-left text-ink-blueprint text-[clamp(1.35rem,2.6vh,2.2rem)]">
               <span className="annotation-arrow" aria-hidden="true">-&gt;</span>
               <div className="lyric-translation">
                   {displayTranslation || " "}

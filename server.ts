@@ -20,11 +20,16 @@ const FINAL_TAIL_SILENCE_MS = 500;
 const FINAL_MESSAGE_WAIT_MS = 3000;
 const WS_OPEN_TIMEOUT_MS = 15_000;
 const MAX_AUDIO_BYTES = 100 * 1024 * 1024;
-const TRANSLATE_BATCH_CHAR_LIMIT = 4800;
-const MAX_SEGMENT_WORDS = 14;
-const MAX_SEGMENT_CHARS = 90;
-const MAX_SEGMENT_SECONDS = 7.5;
-const MIN_SEGMENT_WORDS = 4;
+const GOOGLE_TRANSLATE_REQUEST_BYTE_LIMIT = 100_000;
+const GOOGLE_TRANSLATE_BODY_HEADROOM_BYTES = 10_000;
+const TRANSLATE_HTML_BYTE_LIMIT = GOOGLE_TRANSLATE_REQUEST_BYTE_LIMIT - GOOGLE_TRANSLATE_BODY_HEADROOM_BYTES;
+const TARGET_SEGMENT_WORDS = 7;
+const MAX_SEGMENT_WORDS = 10;
+const TARGET_SEGMENT_CHARS = 42;
+const MAX_SEGMENT_CHARS = 58;
+const TARGET_SEGMENT_SECONDS = 4.2;
+const MAX_SEGMENT_SECONDS = 6;
+const MIN_SEGMENT_WORDS = 2;
 const MIN_NONVOCAL_GAP_SECONDS = 0.65;
 const MIN_MANUAL_COMMIT_SPACING_SECONDS = 12;
 const MAX_MANUAL_COMMIT_MARKS = 80;
@@ -267,38 +272,58 @@ function joinScribeWords(words: any[]) {
     .trim();
 }
 
-function shouldEndLyricChunk(words: any[]) {
-  if (!words.length) return false;
-
-  const text = joinScribeWords(words);
-  const last = words[words.length - 1];
-  const duration = Number(last.end) - Number(words[0].start);
-  const wordCount = words.length;
-  const enoughWords = wordCount >= MIN_SEGMENT_WORDS;
-  const lastText = String(last.text || last.word || "");
-
-  return (
-    (enoughWords && /[.!?。！？]$/.test(lastText)) ||
-    (wordCount >= 8 && /[,;:]$/.test(lastText)) ||
-    wordCount >= MAX_SEGMENT_WORDS ||
-    text.length >= MAX_SEGMENT_CHARS ||
-    (Number.isFinite(duration) && duration >= MAX_SEGMENT_SECONDS)
-  );
-}
-
 function splitTimedWordsForLyrics(words: any[]) {
   const chunks: any[][] = [];
-  let current: any[] = [];
 
-  for (const word of words) {
-    current.push(word);
-    if (shouldEndLyricChunk(current)) {
-      chunks.push(current);
-      current = [];
+  let startIndex = 0;
+  while (startIndex < words.length) {
+    let bestEnd = startIndex;
+    let bestScore = Number.NEGATIVE_INFINITY;
+
+    for (let endIndex = startIndex; endIndex < words.length; endIndex += 1) {
+      const chunk = words.slice(startIndex, endIndex + 1);
+      const text = joinScribeWords(chunk);
+      const wordCount = chunk.length;
+      const duration = Number(chunk[chunk.length - 1].end) - Number(chunk[0].start);
+      const next = words[endIndex + 1];
+      const gapAfter = next ? Math.max(0, Number(next.start) - Number(chunk[chunk.length - 1].end)) : 0;
+      const lastText = String(chunk[chunk.length - 1].text || chunk[chunk.length - 1].word || "");
+      const sentenceBoundary = /[.!?]$/.test(lastText);
+      const phraseBoundary = /[,;:]$/.test(lastText);
+
+      const hardLimit =
+        wordCount > MAX_SEGMENT_WORDS ||
+        text.length > MAX_SEGMENT_CHARS ||
+        (Number.isFinite(duration) && duration > MAX_SEGMENT_SECONDS);
+      if (hardLimit && endIndex > startIndex) break;
+
+      let score = 0;
+      score += Math.min(gapAfter, 2) * 9;
+      if (sentenceBoundary) score += 18;
+      if (phraseBoundary) score += 8;
+      if (wordCount >= MIN_SEGMENT_WORDS && wordCount <= TARGET_SEGMENT_WORDS) score += 5;
+      if (text.length <= TARGET_SEGMENT_CHARS) score += 4;
+      if (Number.isFinite(duration) && duration <= TARGET_SEGMENT_SECONDS) score += 3;
+      if (wordCount < MIN_SEGMENT_WORDS && !sentenceBoundary && !phraseBoundary) score -= 8;
+      if (wordCount > TARGET_SEGMENT_WORDS) score -= (wordCount - TARGET_SEGMENT_WORDS) * 3;
+      if (text.length > TARGET_SEGMENT_CHARS) score -= (text.length - TARGET_SEGMENT_CHARS) * 0.45;
+      if (Number.isFinite(duration) && duration > TARGET_SEGMENT_SECONDS) {
+        score -= (duration - TARGET_SEGMENT_SECONDS) * 2;
+      }
+      if (!next) score += 4;
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestEnd = endIndex;
+      }
+
+      if (sentenceBoundary && wordCount >= MIN_SEGMENT_WORDS) break;
     }
+
+    chunks.push(words.slice(startIndex, bestEnd + 1));
+    startIndex = bestEnd + 1;
   }
 
-  if (current.length) chunks.push(current);
   return chunks;
 }
 
@@ -704,7 +729,7 @@ function getSegmentText(segment: any) {
 function buildTranslationBatches(segments: any[]) {
   const batches: Array<Array<{ index: number; text: string }>> = [];
   let current: Array<{ index: number; text: string }> = [];
-  let currentSize = 0;
+  let currentBytes = 0;
 
   segments.forEach((segment, index) => {
     if (String(segment?.translation || "").trim()) return;
@@ -713,14 +738,15 @@ function buildTranslationBatches(segments: any[]) {
     if (!text) return;
 
     const htmlLine = `<p data-i="${index}">${escapeHtml(text)}</p>`;
-    if (current.length && currentSize + htmlLine.length > TRANSLATE_BATCH_CHAR_LIMIT) {
+    const lineBytes = Buffer.byteLength(htmlLine, "utf8") + 1;
+    if (current.length && currentBytes + lineBytes > TRANSLATE_HTML_BYTE_LIMIT) {
       batches.push(current);
       current = [];
-      currentSize = 0;
+      currentBytes = 0;
     }
 
     current.push({ index, text });
-    currentSize += htmlLine.length;
+    currentBytes += lineBytes;
   });
 
   if (current.length) batches.push(current);
@@ -867,6 +893,8 @@ async function startServer() {
       res.json({
         segments: updatedSegments,
         translationSource: "google-translate",
+        translationRequestMode: batches.length <= 1 ? "single-request" : "chunked-by-api-limit",
+        translationBatchCount: batches.length,
       });
     } catch (error: any) {
       const publicError = error instanceof PublicError ? error : makeGoogleError(error);
