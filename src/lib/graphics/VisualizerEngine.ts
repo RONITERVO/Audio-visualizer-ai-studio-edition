@@ -1,11 +1,18 @@
-import { getEnergy, idleEnergy, pseudoRandom } from "../utils";
+import { getEnergy, idleEnergy } from "../utils";
 
-interface AlcoholDrop {
+interface Drop {
+  x: number; y: number; z: number;
+  speed: number; length: number;
+}
+
+interface Splat {
   x: number; y: number;
-  r: number; maxR: number;
-  color: string;
   life: number; maxLife: number;
-  seed: number;
+}
+
+interface Drip {
+  x: number; y: number;
+  life: number; size: number;
 }
 
 export class VisualizerEngine {
@@ -14,28 +21,23 @@ export class VisualizerEngine {
   rafId: number = 0;
   lastTime: number = performance.now();
 
-  // State for smoothing visualizer movements
   smoothedBins: Float32Array = new Float32Array(32);
-  drops: AlcoholDrop[] = [];
-  lastBassHit: number = 0;
+
+  drops: Drop[] = [];
+  splats: Splat[] = [];
+  drips: Drip[] = [];
+  waterLevels: Float32Array = new Float32Array(64); // Puddles
 
   colors = {
     ink: 'rgba(35, 30, 28, 0.85)',
     inkLight: 'rgba(35, 30, 28, 0.3)',
-    blueprint: 'rgba(24, 75, 165, 0.7)',
-    watercolors: [
-      'hsl(200, 50%, 60%)', // Muted Cyan
-      'hsl(340, 50%, 65%)', // Muted Magenta
-      'hsl(35, 60%, 60%)',  // Muted Ochre
-      'hsl(260, 40%, 65%)'  // Muted Purple
-    ]
+    rain: 'rgba(24, 75, 165, 0.35)', // Faint blueprint ink
+    sun: 'rgba(230, 160, 40, 0.6)' // Warm graphite/watercolor sun
   };
 
   init(canvasId: string) {
     this.canvas = document.getElementById(canvasId) as HTMLCanvasElement;
-    if (this.canvas) {
-      this.ctx = this.canvas.getContext('2d');
-    }
+    if (this.canvas) this.ctx = this.canvas.getContext('2d');
   }
 
   destroy() {
@@ -56,54 +58,19 @@ export class VisualizerEngine {
     }
   }
 
-  // --- SQUIGGLEVISION API ---
-  // Seeded noise based on coordinates and time frame
   jitterVal(x: number, y: number, amp: number, time: number) {
-    const frame = Math.floor(time * 10) % 3; // 10fps stop-motion feel
+    const frame = Math.floor(time * 12) % 3;
     const seed = x * 12.9898 + y * 78.233 + frame * 13.131;
     const h = Math.sin(seed) * 43758.5453;
     return ((h - Math.floor(h)) - 0.5) * amp;
   }
 
-  drawRoughLine(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number, passes: number, amp: number, time: number) {
-    ctx.beginPath();
-    for (let i = 0; i < passes; i++) {
-      let ox1 = x1 + this.jitterVal(x1, y1 + i, amp, time);
-      let oy1 = y1 + this.jitterVal(x1 + i, y1, amp, time);
-      let ox2 = x2 + this.jitterVal(x2, y2 + i, amp, time);
-      let oy2 = y2 + this.jitterVal(x2 + i, y2, amp, time);
-      ctx.moveTo(ox1, oy1);
-
-      let mx = (x1 + x2) / 2 + this.jitterVal((x1 + x2) / 2, (y1 + y2) / 2 + i, amp * 2, time);
-      let my = (y1 + y2) / 2 + this.jitterVal((x1 + x2) / 2 + i, (y1 + y2) / 2, amp * 2, time);
-      ctx.quadraticCurveTo(mx, my, ox2, oy2);
-    }
-    ctx.stroke();
-  }
-
-  fillCrosshatch(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, density: number, amp: number, time: number) {
-    ctx.beginPath();
-    // Diagonal lines one way
-    for (let i = 0; i < w + h; i += density) {
-      let startX = Math.max(x, x + i - h);
-      let startY = Math.max(y, y + h - i);
-      let endX = Math.min(x + w, x + i);
-      let endY = Math.min(y + h, y + w + h - i);
-      if (startX < endX) {
-        ctx.moveTo(startX + this.jitterVal(startX, startY, amp, time), startY);
-        ctx.lineTo(endX + this.jitterVal(endX, endY, amp, time), endY);
-      }
-    }
-    ctx.stroke();
-  }
-
-  // --- CORE RENDER LOOP ---
   drawFrame(analyser: AnalyserNode | null, dataFrequency: Uint8Array | null, dataTime: Uint8Array | null) {
     this.resize();
     if (!this.ctx || !this.canvas) return;
 
     const now = performance.now();
-    const dt = Math.min((now - this.lastTime) / 1000, 0.1); // cap dt
+    const dt = Math.min((now - this.lastTime) / 1000, 0.1);
     this.lastTime = now;
     const t = now / 1000;
 
@@ -115,84 +82,153 @@ export class VisualizerEngine {
 
     const w = width / ratio; const h = height / ratio;
 
-    let frequency = null; let timeData = null;
+    let frequency = null;
+    let dominantBin = 0;
+    let maxBinVal = 0;
+
     if (analyser && dataFrequency && dataTime) {
       analyser.getByteFrequencyData(dataFrequency);
       analyser.getByteTimeDomainData(dataTime);
-      frequency = dataFrequency; timeData = dataTime;
+      frequency = dataFrequency;
+
+      // Find dominant frequency for cloud coloring
+      for (let i = 0; i < 32; i++) {
+        if (frequency[i] > maxBinVal) {
+          maxBinVal = frequency[i];
+          dominantBin = i;
+        }
+      }
     }
 
     const energy = frequency ? getEnergy(frequency, 3, frequency.length * 0.72) : idleEnergy(t);
-    const bass = frequency ? getEnergy(frequency, 0, 10) : idleEnergy(t + 2) * 0.7;
+    const bass = frequency ? getEnergy(frequency, 0, 8) : idleEnergy(t + 2) * 0.7;
+    const treble = frequency ? getEnergy(frequency, 20, 32) : idleEnergy(t + 1) * 0.5;
 
-    // Smooth the frequency bins for architectural rendering
     for (let i = 0; i < 32; i++) {
-      const target = frequency ? (frequency[i] / 255) : Math.abs(Math.sin(t + i * 0.2)) * 0.3;
-      this.smoothedBins[i] += (target - this.smoothedBins[i]) * 12 * dt;
+      const target = frequency ? (frequency[i] / 255) : Math.abs(Math.sin(t + i * 0.2)) * 0.2;
+      this.smoothedBins[i] += (target - this.smoothedBins[i]) * 15 * dt;
     }
 
-    // Render Layers: Back to Front
-    this.processWatercolors(this.ctx, w, h, bass, dt);
-    this.drawAliveCore(this.ctx, w, h, t, frequency, energy, bass);
-    this.drawArchitecturalSkyline(this.ctx, w, h, energy, t);
-    this.drawFloatingWave(this.ctx, w, h, timeData, energy, t);
+    // Dynamic Cloud Hue (Changes based on what note/pitch is loudest)
+    const targetHue = (dominantBin / 32) * 360;
+
+    // Find the text bounding box to act as an umbrella
+    const textEl = document.querySelector('.lyric-wrap');
+    let textRect = null;
+    if (textEl) {
+      const rect = textEl.getBoundingClientRect();
+      // Slightly contract the hitbox so rain looks like it hits the letters directly
+      textRect = { left: rect.left + 10, right: rect.right - 10, top: rect.top + 10, bottom: rect.bottom };
+    }
+
+    // Render Story Layers
+    this.drawAliveSun(this.ctx, w, h, t, frequency, energy, bass, treble);
+    this.drawWatercolorClouds(this.ctx, w, h, t, targetHue, energy);
+    this.processStorm(this.ctx, w, h, energy, dt, t, textRect);
 
     this.ctx.restore();
   }
 
-  // 1. Age of War style Watercolors (Rendered "behind" the paper)
-  processWatercolors(ctx: CanvasRenderingContext2D, w: number, h: number, bass: number, dt: number) {
-    if (bass > 0.7 && performance.now() - this.lastBassHit > 400) {
-      this.lastBassHit = performance.now();
-      if (Math.random() < 0.6) {
-        this.drops.push({
-          x: w * (0.15 + Math.random() * 0.7),
-          y: h * (0.2 + Math.random() * 0.6),
-          r: 20,
-          maxR: 200 + Math.random() * 400,
-          color: this.colors.watercolors[Math.floor(Math.random() * this.colors.watercolors.length)],
-          life: 3.0,
-          maxLife: 3.0 + Math.random() * 2.0,
-          seed: Math.random() * 1000
-        });
-      }
-    }
+  // 1. The Sun & Rays (The beating heart of the track)
+  drawAliveSun(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, frequency: Uint8Array | null, energy: number, bass: number, treble: number) {
+    const cx = w * 0.5;
+    const cy = h * 0.25; // Placed higher up, behind clouds
+    const maxDimension = Math.max(w, h);
+    const baseRadius = maxDimension * (0.1 + bass * 0.05);
+    const maxLift = maxDimension * (0.05 + energy * 0.1);
+    const points = 90;
 
     ctx.save();
-    ctx.globalCompositeOperation = 'multiply';
-    ctx.filter = 'blur(4px)'; // Simulate being on the back side of thin paper
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
 
-    for (let i = this.drops.length - 1; i >= 0; i--) {
-      let drop = this.drops[i];
-      drop.life -= dt;
-      // Alcohol bloom physics (fast initially, slowing down)
-      drop.r += (drop.maxR - drop.r) * 3 * dt;
+    // Draw Rays (Treble reactive)
+    ctx.beginPath();
+    const rayCount = 36;
+    for (let i = 0; i < rayCount; i++) {
+      const angle = (i / rayCount) * Math.PI * 2 + (t * 0.05); // Slow rotation
+      const inner = baseRadius * 1.1;
+      // Rays shoot out significantly on high energy/treble
+      const outer = inner + (maxDimension * 0.1) + (treble * maxDimension * 0.4) + Math.sin(t * 5 + i) * 20;
 
-      if (drop.life <= 0) {
-        this.drops.splice(i, 1);
-        continue;
+      ctx.moveTo(cx + Math.cos(angle) * inner, cy + Math.sin(angle) * inner);
+      ctx.lineTo(
+        cx + Math.cos(angle) * outer + this.jitterVal(cx, cy, 10, t),
+        cy + Math.sin(angle) * outer + this.jitterVal(cy, cx, 10, t)
+      );
+    }
+    ctx.strokeStyle = this.colors.sun;
+    ctx.lineWidth = 1 + energy * 3;
+    ctx.globalAlpha = 0.3 + energy * 0.4;
+    ctx.stroke();
+
+    // Draw Sun Core (Bass reactive)
+    for (let pass = 0; pass < 2; pass++) {
+      ctx.beginPath();
+      for (let i = 0; i <= points; i++) {
+        const percent = i / points;
+        const angle = percent * Math.PI * 2;
+        const sourceIndex = frequency ? Math.floor(percent * (frequency.length * 0.5)) : 0;
+        const value = frequency ? frequency[sourceIndex] / 255 : 0.18 + 0.05 * Math.sin(t * 1.7 + i);
+
+        const wobble = Math.sin(t * 2 + i * 0.2 + pass) * maxDimension * 0.01;
+        const radius = baseRadius + value * maxLift + wobble;
+
+        const x = cx + Math.cos(angle) * radius;
+        const y = cy + Math.sin(angle) * radius;
+
+        if (i === 0) ctx.moveTo(x + this.jitterVal(x, y, 2, t), y);
+        else ctx.lineTo(x + this.jitterVal(x, y, 2, t), y);
       }
+      ctx.closePath();
+      ctx.strokeStyle = pass === 1 ? this.colors.ink : this.colors.sun;
+      ctx.globalAlpha = pass === 1 ? 0.8 : 0.5;
+      ctx.lineWidth = pass === 1 ? 2 : 4 + bass * 10;
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
 
-      // Evaporation curve
-      const alpha = Math.max(0, (drop.life / drop.maxLife) * 0.08); // Very faint
-      ctx.globalAlpha = alpha;
-      ctx.fillStyle = drop.color;
+  // 2. Adaptive Watercolor Clouds
+  drawWatercolorClouds(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, hue: number, energy: number) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.filter = 'blur(10px)'; // Deep paper bleed
+
+    const segments = 16; // Fewer, larger clouds for mobile
+    const segW = w / segments;
+
+    for (let i = 0; i < segments; i++) {
+      const val = this.smoothedBins[i * 2] || 0; // Skip to space them out
+      if (val < 0.05) continue;
+
+      const lightness = 70 - (val * 30);
+      // Saturation increases with track energy, Hue changes with track pitch
+      const saturation = 40 + (energy * 40);
+      const opacity = Math.min(1, val * 1.2);
+
+      ctx.fillStyle = `hsla(${hue + (i * 2)}, ${saturation}%, ${lightness}%, ${opacity})`;
+
+      const cx = i * segW + (segW / 2);
+      // Hanging from the top of the screen
+      const cy = -20 + (val * h * 0.15) + Math.sin(t + i) * 20;
+      const radius = (w * 0.15) + (val * w * 0.2);
 
       ctx.beginPath();
-      const points = 16;
-      for (let j = 0; j <= points; j++) {
-        let angle = (j / points) * Math.PI * 2;
-        // Seeded radius perturbation so the blob doesn't spin or shake, just scales organically
-        let noise = Math.sin(angle * 3 + drop.seed) * 0.2 + Math.cos(angle * 7 + drop.seed) * 0.15;
-        let currentR = drop.r * (1 + noise);
+      for (let j = 0; j <= 12; j++) {
+        let angle = (j / 12) * Math.PI * 2;
+        let noise = Math.sin(angle * 3 + t) * 0.2;
+        let r = radius * (1 + noise);
 
-        let px = drop.x + Math.cos(angle) * currentR;
-        let py = drop.y + Math.sin(angle) * currentR;
+        // Flatten tops so they stick to ceiling
+        if (angle > Math.PI && angle < Math.PI * 2) r *= 0.2;
+
+        let px = cx + Math.cos(angle) * r;
+        let py = Math.min(cy + Math.sin(angle) * r, cy + r);
 
         if (j === 0) ctx.moveTo(px, py);
         else ctx.bezierCurveTo(
-          drop.x + Math.cos(angle - 0.2) * currentR,
-          drop.y + Math.sin(angle - 0.2) * currentR,
+          cx + Math.cos(angle - 0.2) * r, cy + Math.sin(angle - 0.2) * r,
           px, py, px, py
         );
       }
@@ -201,151 +237,135 @@ export class VisualizerEngine {
     ctx.restore();
   }
 
-  // 2. The Living Graphite Core (The Sun/Moon)
-  drawAliveCore(ctx: CanvasRenderingContext2D, w: number, h: number, t: number, frequency: Uint8Array | null, energy: number, bass: number) {
-    const cx = w * 0.5;
-    const cy = h * 0.45;
-    const smaller = Math.min(w, h);
-    const baseRadius = smaller * (0.15 + bass * 0.03);
-    const maxLift = smaller * (0.15 + energy * 0.1);
-    const points = 120;
+  // 3. 3D Rain, Splats, and Puddles
+  processStorm(ctx: CanvasRenderingContext2D, w: number, h: number, energy: number, dt: number, t: number, textRect: any) {
+    // Spawning Rain
+    for (let i = 0; i < 32; i += 2) {
+      const val = this.smoothedBins[i];
+      const dropsToSpawn = Math.floor(val * 4) + (Math.random() < val ? 1 : 0);
 
-    ctx.save();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-
-    for (let pass = 0; pass < 3; pass++) {
-      ctx.beginPath();
-      for (let i = 0; i <= points; i++) {
-        const percent = i / points;
-        const angle = percent * Math.PI * 2;
-        const sourceIndex = frequency ? Math.floor(percent * (frequency.length * 0.5)) : 0;
-        const value = frequency ? frequency[sourceIndex] / 255 : 0.18 + 0.05 * Math.sin(t * 1.7 + i);
-
-        const wobble = Math.sin(t * 2 + i * 0.2 + pass) * smaller * 0.01;
-        const radius = baseRadius + value * maxLift + wobble + pass * smaller * 0.01;
-
-        const x = cx + Math.cos(angle) * radius;
-        const y = cy + Math.sin(angle) * radius * 0.9;
-
-        if (i === 0) ctx.moveTo(x + this.jitterVal(x, y, 3, t), y);
-        else ctx.lineTo(x + this.jitterVal(x, y, 3, t), y);
-      }
-      ctx.closePath();
-      ctx.strokeStyle = pass === 2 ? this.colors.blueprint : this.colors.ink;
-      ctx.globalAlpha = pass === 2 ? 0.3 + energy * 0.3 : 0.15 + energy * 0.3;
-      ctx.lineWidth = (pass === 0 ? 0.8 : 1.5) + energy * 2;
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  // 3. Procedural Evolving Bridge / Castle
-  drawArchitecturalSkyline(ctx: CanvasRenderingContext2D, w: number, h: number, energy: number, t: number) {
-    ctx.save();
-    ctx.strokeStyle = this.colors.ink;
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-
-    const numTowers = 16;
-    const spacing = w / (numTowers + 1);
-    const baseY = h * 0.9;
-
-    // Base Ground Line
-    ctx.lineWidth = 1.5;
-    this.drawRoughLine(ctx, 0, baseY, w, baseY, 2, 2, t);
-
-    for (let i = 1; i <= numTowers; i++) {
-      const x = i * spacing;
-      // Bins 0-15 map to towers
-      const val = this.smoothedBins[i - 1];
-      const height = 40 + (val * h * 0.4);
-      const topY = baseY - height;
-      const towerWidth = spacing * 0.4;
-
-      // Draw Left and Right Walls
-      ctx.lineWidth = 1.5;
-      this.drawRoughLine(ctx, x - towerWidth / 2, baseY, x - towerWidth / 2, topY, 2, 1.5, t);
-      this.drawRoughLine(ctx, x + towerWidth / 2, baseY, x + towerWidth / 2, topY, 2, 1.5, t);
-
-      // Draw Tower Roof / Battlements
-      if (i % 2 === 0) {
-        // Spire
-        this.drawRoughLine(ctx, x - towerWidth / 2 - 5, topY, x + towerWidth / 2 + 5, topY, 2, 2, t);
-        this.drawRoughLine(ctx, x - towerWidth / 2, topY, x, topY - towerWidth, 2, 2, t);
-        this.drawRoughLine(ctx, x + towerWidth / 2, topY, x, topY - towerWidth, 2, 2, t);
-      } else {
-        // Flat Battlement
-        this.drawRoughLine(ctx, x - towerWidth / 2 - 5, topY, x + towerWidth / 2 + 5, topY, 2, 2, t);
-      }
-
-      // Shading / Crosshatching based on frequency volume
-      if (val > 0.3) {
-        ctx.strokeStyle = this.colors.inkLight;
-        ctx.lineWidth = 1;
-        const density = 12 - (val * 6); // Gets denser as it gets louder
-        this.fillCrosshatch(ctx, x - towerWidth / 2 + 2, topY + 5, towerWidth - 4, height - 10, density, 2, t);
-        ctx.strokeStyle = this.colors.ink;
-      }
-
-      // Bridges connecting towers
-      if (i > 1) {
-        const prevX = (i - 1) * spacing;
-        const prevVal = this.smoothedBins[i - 2];
-        const prevTopY = baseY - (40 + (prevVal * h * 0.4));
-
-        // Suspension Bridge Cable
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        let p1x = prevX + towerWidth / 2;
-        let p1y = prevTopY + 20;
-        let p2x = x - towerWidth / 2;
-        let p2y = topY + 20;
-
-        let cx1 = p1x + (p2x - p1x) / 2;
-        let cy1 = Math.max(p1y, p2y) + 50 + (energy * 100); // Arch dips down, flexes with energy
-
-        ctx.moveTo(p1x + this.jitterVal(p1x, p1y, 2, t), p1y);
-        ctx.quadraticCurveTo(
-          cx1 + this.jitterVal(cx1, cy1, 4, t),
-          cy1 + this.jitterVal(cx1, cy1, 4, t),
-          p2x + this.jitterVal(p2x, p2y, 2, t), p2y
-        );
-        ctx.stroke();
+      for (let d = 0; d < dropsToSpawn; d++) {
+        const z = 0.5 + Math.random(); // Parallax depth
+        this.drops.push({
+          x: (i / 32) * w + (Math.random() * (w / 16)),
+          y: -10, // Spawn above screen
+          z: z,
+          speed: h * 0.8 * z + (energy * h * 0.5), // Scales with screen height
+          length: (h * 0.02) * z + (val * h * 0.03)
+        });
       }
     }
-    ctx.restore();
-  }
 
-  // 4. Chaotic Floating Waveform (The strings of music)
-  drawFloatingWave(ctx: CanvasRenderingContext2D, w: number, h: number, timeData: Uint8Array | null, energy: number, t: number) {
     ctx.save();
-    ctx.strokeStyle = this.colors.inkLight;
-    ctx.lineWidth = 1 + energy * 2;
     ctx.lineCap = 'round';
 
-    const points = 128;
-    const startX = w * 0.05;
-    const endX = w * 0.95;
-    const midY = h * 0.25;
+    // Puddle Drainage & Overflow
+    for (let i = 0; i < this.waterLevels.length; i++) {
+      this.waterLevels[i] = Math.max(0, this.waterLevels[i] - 20 * dt);
+      if (this.waterLevels[i] > h * 0.1 && Math.random() < 0.1) {
+        this.drips.push({
+          x: (i / this.waterLevels.length) * w,
+          y: h,
+          life: 1.0,
+          size: w * 0.005 + Math.random() * (w * 0.01)
+        });
+        this.waterLevels[i] -= h * 0.05;
+      }
+    }
 
+    // Fast batch drawing for rain
     ctx.beginPath();
-    for (let pass = 0; pass < 2; pass++) {
-      for (let i = 0; i < points; i++) {
-        const percent = i / points;
-        const x = startX + percent * (endX - startX);
-        const sampleIndex = timeData ? Math.floor(percent * timeData.length) : 0;
-        const sample = timeData ? (timeData[sampleIndex] - 128) / 128 : Math.sin(t * 3 + i * 0.1) * 0.2;
+    ctx.strokeStyle = this.colors.rain;
+    for (let i = this.drops.length - 1; i >= 0; i--) {
+      let drop = this.drops[i];
+      drop.y += drop.speed * dt;
 
-        // The wave physically tears and scribbles harder with energy
-        const scratch = Math.sin(i * 0.6 + t * 5) * (energy * 30);
-        const y = midY + (sample * h * 0.15) + scratch + this.jitterVal(x, midY, 4, t);
-
-        if (i === 0) ctx.moveTo(x, y);
-        else ctx.lineTo(x, y);
+      let hitText = false;
+      // Text acts as an umbrella!
+      if (textRect && drop.y > textRect.top && drop.y < textRect.bottom && drop.x > textRect.left && drop.x < textRect.right) {
+        hitText = true;
       }
+      let hitFloor = drop.y > h;
+
+      if (hitText || hitFloor) {
+        // Smaller splats for text, larger for floor
+        const splatLife = hitText ? 0.1 : 0.2;
+        this.splats.push({ x: drop.x, y: hitFloor ? h : drop.y, life: splatLife, maxLife: splatLife });
+        if (hitFloor) {
+          const segment = Math.floor((drop.x / w) * this.waterLevels.length);
+          if (segment >= 0 && segment < this.waterLevels.length) {
+            this.waterLevels[segment] += drop.z * 3; // Add volume to puddle
+          }
+        }
+        this.drops.splice(i, 1);
+        continue;
+      }
+
+      ctx.globalAlpha = drop.z * 0.6;
+      ctx.lineWidth = drop.z * 1.5;
+      ctx.moveTo(drop.x, drop.y);
+      ctx.lineTo(drop.x + (drop.speed * 0.03 * energy), drop.y + drop.length); // Wind skew
     }
     ctx.stroke();
+
+    // Draw Splats
+    ctx.globalAlpha = 0.5;
+    for (let i = this.splats.length - 1; i >= 0; i--) {
+      let splat = this.splats[i];
+      splat.life -= dt;
+      if (splat.life <= 0) { this.splats.splice(i, 1); continue; }
+
+      const progress = 1 - (splat.life / splat.maxLife);
+      const radius = progress * (w * 0.015);
+
+      ctx.beginPath();
+      ctx.ellipse(splat.x, splat.y, radius * 1.5, radius * 0.4, 0, 0, Math.PI * 2);
+      ctx.strokeStyle = this.colors.inkLight;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    }
+
+    // Draw Puddles (Squigglevision Wave)
+    ctx.beginPath();
+    ctx.fillStyle = this.colors.rain;
+    ctx.moveTo(0, h);
+    for (let i = 0; i < this.waterLevels.length; i++) {
+      let px = (i / this.waterLevels.length) * w;
+      let pLevel = this.waterLevels[i];
+      let py = h - pLevel + this.jitterVal(px, h, pLevel * 0.1, t);
+      ctx.lineTo(px, py);
+    }
+    ctx.lineTo(w, h);
+    ctx.fill();
+    // Puddle surface outline
+    ctx.beginPath();
+    ctx.strokeStyle = this.colors.ink;
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < this.waterLevels.length; i++) {
+      let px = (i / this.waterLevels.length) * w;
+      let pLevel = this.waterLevels[i];
+      let py = h - pLevel + this.jitterVal(px, h, pLevel * 0.1, t);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+
+    // Draw Drips (Falling off screen onto user's feet)
+    ctx.fillStyle = this.colors.inkLight;
+    for (let i = this.drips.length - 1; i >= 0; i--) {
+      let drip = this.drips[i];
+      drip.life -= dt;
+      drip.y += (1 - drip.life) * (h * 0.5) * dt;
+
+      if (drip.life <= 0) { this.drips.splice(i, 1); continue; }
+
+      ctx.globalAlpha = drip.life;
+      ctx.beginPath();
+      ctx.arc(drip.x, drip.y, drip.size, 0, Math.PI);
+      ctx.lineTo(drip.x, drip.y - drip.size * 2);
+      ctx.fill();
+    }
+
     ctx.restore();
   }
 }
