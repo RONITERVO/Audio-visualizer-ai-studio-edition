@@ -1,0 +1,6 @@
+{
+  "name": "Living Sketchbook Music",
+  "description": "A standalone browser music visualizer for local audio, per-song lyric guides, and per-song timing data.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
