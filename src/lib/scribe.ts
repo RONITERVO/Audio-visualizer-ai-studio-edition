@@ -18,6 +18,8 @@ export async function generateScribeTranscript(options: {
   sourceLanguage?: string;
   previousText?: string;
   keyterms?: string[];
+  commitStrategy?: "vad" | "manual-from-gaps";
+  referenceSegments?: any[];
 }) {
   const audioBase64 = await fileToBase64(options.file);
 
@@ -32,6 +34,8 @@ export async function generateScribeTranscript(options: {
       sourceLanguage: options.sourceLanguage || "",
       previousText: options.previousText || "Song lyrics",
       keyterms: options.keyterms || [],
+      commitStrategy: options.commitStrategy || "vad",
+      referenceSegments: options.referenceSegments || [],
     }),
   });
 

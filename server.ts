@@ -25,6 +25,9 @@ const MAX_SEGMENT_WORDS = 14;
 const MAX_SEGMENT_CHARS = 90;
 const MAX_SEGMENT_SECONDS = 7.5;
 const MIN_SEGMENT_WORDS = 4;
+const MIN_NONVOCAL_GAP_SECONDS = 0.65;
+const MIN_MANUAL_COMMIT_SPACING_SECONDS = 12;
+const MAX_MANUAL_COMMIT_MARKS = 80;
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -390,25 +393,95 @@ async function* pcmChunksFromAudioFile(filePath: string): AsyncGenerator<Buffer>
   }
 }
 
-function buildScribeUrl(sourceLanguage: string, keyterms: string[]) {
+function getFiniteNumber(value: any) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : NaN;
+}
+
+function extractReferenceTimedWords(segment: any) {
+  if (!Array.isArray(segment?.words)) return [];
+  return segment.words
+    .map((word: any) => ({
+      start: getFiniteNumber(word?.start),
+      end: getFiniteNumber(word?.end),
+    }))
+    .filter((word: any) => Number.isFinite(word.start) && Number.isFinite(word.end) && word.end > word.start)
+    .sort((left: any, right: any) => left.start - right.start);
+}
+
+function deriveManualCommitMarks(referenceSegments: any[]) {
+  const candidates: number[] = [];
+  const sortedSegments = (Array.isArray(referenceSegments) ? referenceSegments : [])
+    .map((segment) => ({
+      start: getFiniteNumber(segment?.start),
+      end: getFiniteNumber(segment?.end),
+      words: extractReferenceTimedWords(segment),
+    }))
+    .filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start)
+    .sort((left, right) => left.start - right.start);
+
+  for (let index = 0; index < sortedSegments.length - 1; index += 1) {
+    const current = sortedSegments[index];
+    const next = sortedSegments[index + 1];
+    const gap = next.start - current.end;
+    if (gap >= MIN_NONVOCAL_GAP_SECONDS) {
+      candidates.push(current.end + Math.min(gap / 2, 1.5));
+    }
+  }
+
+  for (const segment of sortedSegments) {
+    const words = segment.words;
+    for (let index = 0; index < words.length - 1; index += 1) {
+      const gap = words[index + 1].start - words[index].end;
+      if (gap >= MIN_NONVOCAL_GAP_SECONDS) {
+        candidates.push(words[index].end + Math.min(gap / 2, 1.5));
+      }
+    }
+  }
+
+  const marks: number[] = [];
+  for (const candidate of candidates.sort((left, right) => left - right)) {
+    if (candidate < 2) continue;
+    const previous = marks[marks.length - 1];
+    if (previous == null || candidate - previous >= MIN_MANUAL_COMMIT_SPACING_SECONDS) {
+      marks.push(Number(candidate.toFixed(3)));
+    }
+    if (marks.length >= MAX_MANUAL_COMMIT_MARKS) break;
+  }
+
+  return marks;
+}
+
+function normalizeCommitStrategy(value: any, manualCommitMarks: number[]) {
+  return value === "manual-from-gaps" && manualCommitMarks.length ? "manual" : "vad";
+}
+
+function buildScribeUrl(options: {
+  sourceLanguage: string;
+  keyterms: string[];
+  commitStrategy: "vad" | "manual";
+}) {
   const url = new URL("wss://api.elevenlabs.io/v1/speech-to-text/realtime");
   url.searchParams.set("model_id", "scribe_v2_realtime");
   url.searchParams.set("audio_format", "pcm_16000");
   url.searchParams.set("include_timestamps", "true");
-  url.searchParams.set("commit_strategy", "vad");
   url.searchParams.set("no_verbatim", "false");
-  url.searchParams.set("vad_silence_threshold_secs", "1.5");
-  url.searchParams.set("vad_threshold", "0.4");
-  url.searchParams.set("min_speech_duration_ms", "120");
-  url.searchParams.set("min_silence_duration_ms", "650");
+  url.searchParams.set("commit_strategy", options.commitStrategy);
 
-  if (sourceLanguage) {
-    url.searchParams.set("language_code", sourceLanguage);
+  if (options.commitStrategy === "vad") {
+    url.searchParams.set("vad_silence_threshold_secs", "1.5");
+    url.searchParams.set("vad_threshold", "0.4");
+    url.searchParams.set("min_speech_duration_ms", "120");
+    url.searchParams.set("min_silence_duration_ms", "650");
+  }
+
+  if (options.sourceLanguage) {
+    url.searchParams.set("language_code", options.sourceLanguage);
   } else {
     url.searchParams.set("include_language_detection", "true");
   }
 
-  for (const term of keyterms.slice(0, 50)) {
+  for (const term of options.keyterms.slice(0, 50)) {
     const clean = String(term || "").trim().slice(0, 20);
     if (clean) url.searchParams.append("keyterms", clean);
   }
@@ -422,13 +495,21 @@ async function streamToScribe(filePath: string, options: {
   previousText: string;
   keyterms: string[];
   requestId: string;
+  commitStrategy: "vad" | "manual";
+  manualCommitMarks: number[];
 }) {
   const requestId = options.requestId;
-  const scribeUrl = buildScribeUrl(options.sourceLanguage, options.keyterms);
+  const scribeUrl = buildScribeUrl({
+    sourceLanguage: options.sourceLanguage,
+    keyterms: options.keyterms,
+    commitStrategy: options.commitStrategy,
+  });
   scribeLog(requestId, "opening websocket", {
     host: scribeUrl.host,
     model: scribeUrl.searchParams.get("model_id"),
     sourceLanguage: options.sourceLanguage || "auto",
+    commitStrategy: options.commitStrategy,
+    manualCommitMarks: options.manualCommitMarks.length,
   });
 
   const ws = new WebSocket(scribeUrl, {
@@ -441,6 +522,7 @@ async function streamToScribe(filePath: string, options: {
   let lastLoggedType = "";
   let chunksSent = 0;
   let audioMsSent = 0;
+  let manualCommitIndex = 0;
 
   ws.on("message", (data) => {
     try {
@@ -503,6 +585,27 @@ async function streamToScribe(filePath: string, options: {
       firstChunk = false;
       chunksSent += 1;
       audioMsSent += Math.round((chunk.length / BYTES_PER_SECOND) * 1000);
+
+      if (options.commitStrategy === "manual") {
+        const audioSecondsSent = audioMsSent / 1000;
+        while (
+          manualCommitIndex < options.manualCommitMarks.length &&
+          audioSecondsSent >= options.manualCommitMarks[manualCommitIndex]
+        ) {
+          sendWsJson(ws, {
+            message_type: "input_audio_chunk",
+            audio_base_64: "",
+            commit: true,
+            sample_rate: SAMPLE_RATE,
+          });
+          scribeLog(requestId, "manual gap commit sent", {
+            at: options.manualCommitMarks[manualCommitIndex],
+            audioSecondsSent: Number(audioSecondsSent.toFixed(1)),
+          });
+          manualCommitIndex += 1;
+        }
+      }
+
       if (chunksSent === 1 || chunksSent % Math.round(30_000 / CHUNK_MS) === 0) {
         scribeLog(requestId, "audio streamed", {
           chunksSent,
@@ -548,7 +651,7 @@ async function streamToScribe(filePath: string, options: {
     .sort((a, b) => a.start - b.start || a.order - b.order)
     .map((segment, index) => ({ ...segment, order: index }));
 
-  scribeLog(requestId, "finished", { segments: sortedSegments.length });
+  scribeLog(requestId, "finished", { segments: sortedSegments.length, commitStrategy: options.commitStrategy });
   return sortedSegments;
 }
 
@@ -697,6 +800,11 @@ async function startServer() {
       const sourceLanguage = normalizeLanguageCode(body.sourceLanguage);
       const keyterms = Array.isArray(body.keyterms) ? body.keyterms : [];
       const previousText = String(body.previousText || "Song lyrics").slice(0, 50);
+      const manualCommitMarks = deriveManualCommitMarks(body.referenceSegments);
+      const commitStrategy = normalizeCommitStrategy(body.commitStrategy, manualCommitMarks);
+      if (body.commitStrategy === "manual-from-gaps" && commitStrategy !== "manual") {
+        scribeLog(requestId, "no usable transcript gaps found; using vad");
+      }
 
       const segments = await streamToScribe(tmpPath, {
         apiKey,
@@ -704,11 +812,15 @@ async function startServer() {
         previousText,
         keyterms,
         requestId,
+        commitStrategy,
+        manualCommitMarks,
       });
 
       res.json({
         source: "elevenlabs-scribe-v2-realtime",
         model: "scribe_v2_realtime",
+        commitStrategy,
+        manualCommitMarks: commitStrategy === "manual" ? manualCommitMarks : [],
         segments,
       });
     } catch (error: any) {

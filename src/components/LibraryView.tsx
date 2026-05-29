@@ -30,10 +30,20 @@ function getErrorMessage(error: any) {
   return String(error?.message || error || "Generation failed");
 }
 
+function parseTimingSegments(text: string) {
+  try {
+    const data = JSON.parse(text);
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data?.segments)) return data.segments;
+  } catch {}
+  return [];
+}
+
 function SongDetail({ song }: { song: any }) {
   const [timingText, setTimingText] = useState(song.timing?.textCache || "");
   const [statusText, setStatusText] = useState("");
   const [isGeneratingTiming, setIsGeneratingTiming] = useState(false);
+  const [generationMode, setGenerationMode] = useState<"generate" | "fix" | "">("");
   const translationEnabled = useStore((state) => state.translationEnabled);
   const saveTimeout = useRef<any>(null);
 
@@ -65,7 +75,7 @@ function SongDetail({ song }: { song: any }) {
     }, 500);
   };
 
-  const handleGenerateSyncedTranslations = async () => {
+  const runScribePipeline = async (mode: "generate" | "fix") => {
     if (!song.file || isGeneratingTiming) return;
 
     const state = useStore.getState();
@@ -75,10 +85,21 @@ function SongDetail({ song }: { song: any }) {
     let segments: any[] = [];
     let translationSource = "";
     let translationError = "";
+    const referenceSegments = mode === "fix" ? parseTimingSegments(timingText) : [];
+
+    if (mode === "fix" && !referenceSegments.length) {
+      setStatusText("Fix needs existing synced timing JSON first.");
+      return;
+    }
 
     setIsGeneratingTiming(true);
-    setStatusText("Streaming audio to Scribe...");
-    setTimingText("Streaming audio to ElevenLabs Scribe v2 Realtime...\nThis can take about the song length.");
+    setGenerationMode(mode);
+    setStatusText(mode === "fix" ? "Restreaming audio with transcript-gap commits..." : "Streaming audio to Scribe...");
+    setTimingText(
+      mode === "fix"
+        ? "Restreaming audio to ElevenLabs Scribe v2 Realtime...\nUsing existing transcript gaps as manual commit points."
+        : "Streaming audio to ElevenLabs Scribe v2 Realtime...\nThis can take about the song length."
+    );
 
     try {
       const scribe = await generateScribeTranscript({
@@ -86,6 +107,8 @@ function SongDetail({ song }: { song: any }) {
         apiKey: state.elevenLabsApiKey,
         sourceLanguage,
         previousText: sourceLanguage ? `Song lyrics in ${sourceLanguage}` : "Song lyrics",
+        commitStrategy: mode === "fix" ? "manual-from-gaps" : "vad",
+        referenceSegments,
       });
 
       segments = Array.isArray(scribe.segments) ? scribe.segments : [];
@@ -118,6 +141,9 @@ function SongDetail({ song }: { song: any }) {
         transcriptionSource: "elevenlabs-scribe-v2-realtime",
         translationSource,
         geminiUsed: false,
+        fixMode: mode === "fix",
+        commitStrategy: scribe.commitStrategy || (mode === "fix" ? "manual" : "vad"),
+        manualCommitMarks: Array.isArray(scribe.manualCommitMarks) ? scribe.manualCommitMarks : [],
         sourceLanguage: sourceLanguage || "auto",
         targetLanguage: state.translationEnabled ? targetLanguage : "",
         generatedAt: new Date().toISOString(),
@@ -133,8 +159,12 @@ function SongDetail({ song }: { song: any }) {
       setTimingText(`Failed to generate synced translations.\n\n${message}`);
     } finally {
       setIsGeneratingTiming(false);
+      setGenerationMode("");
     }
   };
+
+  const handleGenerateSyncedTranslations = () => runScribePipeline("generate");
+  const handleFixSyncedTranslations = () => runScribePipeline("fix");
 
   return (
     <div className="song-detail grid gap-4 px-5 pb-5 mt-4 border-t border-ink-graphite/20 pt-5 cursor-default" onClick={(event) => event.stopPropagation()}>
@@ -153,18 +183,28 @@ function SongDetail({ song }: { song: any }) {
               title="Uses the keys below, or server environment keys when fields are empty."
             >
               {isGeneratingTiming
-                ? "Creating synced translations..."
+                ? generationMode === "fix" ? "Fixing synced lyrics..." : "Creating synced translations..."
                 : translationEnabled
                   ? "Generate Synced Translations"
                   : "Generate Scribe Timings"}
             </button>
             {timingText.trim() && (
-              <button
-                className="soft-button bg-transparent border border-ink-graphite/40 px-3 py-1 font-body text-[1.1rem] cursor-pointer"
-                onClick={() => navigator.clipboard.writeText(timingText)}
-              >
-                Copy
-              </button>
+              <>
+                <button
+                  className="soft-button bg-transparent border border-ink-graphite/40 px-3 py-1 font-body text-[1.1rem] cursor-pointer"
+                  onClick={() => navigator.clipboard.writeText(timingText)}
+                >
+                  Copy
+                </button>
+                <button
+                  className="soft-button bg-transparent border border-ink-graphite/40 px-3 py-1 font-body text-[1.1rem] cursor-pointer"
+                  onClick={handleFixSyncedTranslations}
+                  disabled={isGeneratingTiming || !song.file}
+                  title="Restreams to Scribe and commits at non-vocal gaps inferred from the current timing JSON."
+                >
+                  Fix
+                </button>
+              </>
             )}
           </div>
         </header>
