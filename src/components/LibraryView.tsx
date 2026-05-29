@@ -22,7 +22,6 @@ function createTimingItem(song: any, text: string) {
     updatedAt: Date.now(),
     kind: "timed",
     title: existing.title || "",
-    slotKind: "timing",
   };
 }
 
@@ -140,7 +139,6 @@ function SongDetail({ song }: { song: any }) {
         source: "elevenlabs-scribe-v2-realtime",
         transcriptionSource: "elevenlabs-scribe-v2-realtime",
         translationSource,
-        geminiUsed: false,
         fixMode: mode === "fix",
         commitStrategy: scribe.commitStrategy || (mode === "fix" ? "manual" : "vad"),
         manualCommitMarks: Array.isArray(scribe.manualCommitMarks) ? scribe.manualCommitMarks : [],

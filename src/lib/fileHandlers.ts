@@ -54,7 +54,6 @@ function createSongFromFile(file: File, options: any = {}) {
         folderLabel: getTopFolderName(relativePath),
         fileHandleId: "",
         fileLabel: file.name,
-        guide: null,
         timing: null,
         recoveryStatus: "",
         needsRecovery: false,
@@ -151,15 +150,13 @@ function findSongForTextItem(item: any, preferSongs: any[]) {
 
 function applyTextItemToSong(song: any, item: any) {
     const state = useStore.getState();
-    const slot = item.kind === "timed" || item.kind === "timing" ? "timing" : "guide";
-    item.slotKind = slot;
+    item.kind = "timed";
     
-    // Update the song object inside the state
     const newAudioFiles = state.audioFiles.map(s => {
         if (s.id === song.id) {
             return {
                 ...s,
-                [slot]: item,
+                timing: item,
                 recoveryStatus: ""
             }
         }
@@ -190,20 +187,14 @@ export async function loadSongSegments(songId: string) {
     const song = state.audioFiles.find(s => s.id === songId);
     if (!song) return;
 
-    let guideSegments: any[] = [];
     let timingSegments: any[] = [];
-
-    if (song.guide) {
-        await ensureParsed(song.guide);
-        guideSegments = song.guide.segments || [];
-    }
     
     if (song.timing) {
         await ensureParsed(song.timing);
         timingSegments = song.timing.segments || [];
     }
 
-    let finalSegments = timingSegments.length ? timingSegments : guideSegments;
+    let finalSegments = timingSegments;
 
     // Distribute untimed segments
     let cursor = 0;

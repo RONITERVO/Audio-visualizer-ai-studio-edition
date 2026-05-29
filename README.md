@@ -1,20 +1,39 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
+# Living Sketchbook Music
 
-# Run and deploy your AI Studio app
+A local music visualizer for synced bilingual lyrics.
 
-This contains everything you need to run your app locally.
+The app pipeline is:
 
-View your app in AI Studio: https://ai.studio/apps/64caabdb-4fc5-4c23-b5ac-4767aa29b7a5
+```txt
+Audio file -> ElevenLabs Scribe Realtime -> word-timed source lyrics -> Google Translate -> synced bilingual playback
+```
 
-## Run Locally
-
-**Prerequisites:**  Node.js
-
+## Local Setup
 
 1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+
+   ```bash
+   npm install
+   ```
+
+2. Copy `.env.example` to `.env` and set:
+
+   ```env
+   ELEVENLABS_API_KEY=
+   GOOGLE_TRANSLATE_API_KEY=
+   ```
+
+   The UI can also accept keys per device.
+
+3. Run locally:
+
+   ```bash
+   npm run dev
+   ```
+
+## Checks
+
+```bash
+npm run lint
+npm run build
+```

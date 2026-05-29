@@ -1,9 +1,9 @@
-import { createId, getExtension, looksLikeJson, looksLikeLooseJson } from "./utils";
+import { createId, looksLikeJson, looksLikeLooseJson } from "./utils";
 import { Segment } from "../types";
 
-export function parseTranscript(text: string, extension: string): { kind: "guide" | "timed", title?: string, segments: Segment[] } {
+export function parseTranscript(text: string, extension: string): { kind: "timed", title?: string, segments: Segment[] } {
   const trimmed = text.trim(); 
-  if (!trimmed) return { kind: "guide", segments: [] };
+  if (!trimmed) return { kind: "timed", segments: [] };
   
   if (extension === "json" || looksLikeJson(trimmed) || looksLikeLooseJson(trimmed)) {
       return parseJsonTranscript(trimmed);
@@ -17,13 +17,8 @@ export function parseTranscript(text: string, extension: string): { kind: "guide
   
   const looseTimed = parseLooseTimedText(trimmed); 
   if (looseTimed.length) return { kind: "timed", segments: normalizeSegments(looseTimed) };
-  
-  const guide = parseSunoLyricGuide(trimmed);
-  if (guide.segments.length >= 2 || (["txt", "text", "lyrics"].includes(extension) && guide.segments.length)) {
-      return { kind: "guide", title: guide.title, segments: normalizeSegments(guide.segments) };
-  }
-  
-  return { kind: "guide", segments: parsePlainText(trimmed) };
+
+  return { kind: "timed", segments: parsePlainText(trimmed) };
 }
 
 function parseCueTranscript(text: string): Segment[] {
@@ -85,7 +80,7 @@ function parseJsonTranscript(text: string) {
         return { kind: "timed" as any, segments: normalizeSegments(parsed) };
     }
     
-    return { kind: "guide" as any, segments: parsePlainText(data.text || data.transcript || "") };
+    return { kind: "timed" as any, segments: parsePlainText(data.text || data.transcript || "") };
 }
 
 function parseLooseTimedText(text: string) {
@@ -108,81 +103,6 @@ function parseLooseTimedText(text: string) {
         }
     }
     return segments.length >= 2 ? segments : [];
-}
-
-function parseSunoLyricGuide(text: string) {
-    const lines = text.replace(/\r/g, "").split("\n"); 
-    const segments: any[] = []; 
-    let title = ""; 
-    let section = ""; 
-    let order = 0;
-    
-    for (const rawLine of lines) {
-      const line = rawLine.trim(); 
-      if (!line || /^```/i.test(line) || /^(code|text)$/i.test(line)) continue;
-      
-      const metaLine = line.replace(/^#{1,6}\s*/, "").replace(/\*\*/g, "").trim();
-      const trackTitle = metaLine.match(/^track\s+\d+\s*:\s*(.+)$/i);
-      if (trackTitle && !title) { title = trackTitle[1].trim(); continue; }
-      if (/^(concept|styles?)\s*:/i.test(metaLine)) continue;
-      
-      const sectionMatch = metaLine.match(/^\[([^\]]+)\]$/);
-      if (sectionMatch) { section = sectionMatch[1].trim(); continue; }
-      
-      const parsed = parseGuideLyricLine(metaLine);
-      if (!parsed) continue;
-
-      segments.push({ 
-          start: NaN, 
-          end: NaN, 
-          text: metaLine, 
-          raw: metaLine,
-          primary: parsed.primary,
-          translation: parsed.translation,
-          secondary: parsed.secondary,
-          section, 
-          role: parsed.role, 
-          order 
-      });
-      order += 1;
-    }
-    return { title, segments };
-}
-
-function parseGuideLyricLine(line: string) {
-    if (/^```/i.test(line) || /^#{1,6}\s+/.test(line)) return null;
-    if (/^\[[^\]]+\]$/.test(line)) return null;
-    if (/^(track\s+\d+\s*:|concept\s*:|styles?\s*:)/i.test(line)) return null;
-
-    const adlib = line.match(/^\(([^)]+)\)$/);
-    if (adlib) {
-      return {
-        primary: stripTrailingDots(adlib[1].trim()),
-        translation: "",
-        secondary: "",
-        role: "adlib"
-      };
-    }
-
-    const paired = line.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
-    if (paired) {
-      return {
-        primary: paired[1].trim(),
-        translation: stripTranslationMarks(paired[2]),
-        secondary: "",
-        role: "lyric"
-      };
-    }
-
-    if (/^[^\w\u00c0-\u024f\u3400-\u9fff]*$/.test(line)) return null;
-    if (/^\[.+\]$/.test(line)) return null;
-
-    return {
-      primary: stripTrailingDots(line),
-      translation: "",
-      secondary: "",
-      role: "lyric"
-    };
 }
 
 function parsePlainText(text: string) {
