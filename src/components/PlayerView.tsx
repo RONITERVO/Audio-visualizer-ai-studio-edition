@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useStore } from "../lib/store";
-import { cleanTitle } from "../lib/utils";
+import { formatClock, formatPreciseClock, cleanTitle } from "../lib/utils";
 import { VisualizerEngine } from "../lib/graphics/VisualizerEngine";
 
 export function PlayerView() {
@@ -15,6 +15,7 @@ export function PlayerView() {
 
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
 
   const song = audioFiles.find(a => a.id === selectedAudioId);
 
@@ -56,7 +57,7 @@ export function PlayerView() {
   }, [view]);
 
   const closePlayer = (e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent toggling play state when leaving
+    e.stopPropagation();
     useStore.setState({ view: "library" });
   };
 
@@ -72,6 +73,7 @@ export function PlayerView() {
       audioEl.addEventListener('pause', () => setIsPlaying(false));
       audioEl.addEventListener('ended', () => setIsPlaying(false));
       audioEl.addEventListener('timeupdate', (e) => setCurrentTime((e.currentTarget as HTMLAudioElement).currentTime));
+      audioEl.addEventListener('loadedmetadata', (e) => setDuration((e.currentTarget as HTMLAudioElement).duration));
     }
 
     if (song?.url && audioEl.src !== song.url) {
@@ -85,7 +87,7 @@ export function PlayerView() {
       audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
       analyser = audioContext.createAnalyser();
       analyser.fftSize = 512;
-      analyser.smoothingTimeConstant = 0.85; // Smooth out for natural weather flow
+      analyser.smoothingTimeConstant = 0.78;
       dataFrequency = new Uint8Array(analyser.frequencyBinCount);
       dataTime = new Uint8Array(analyser.fftSize);
 
@@ -103,10 +105,25 @@ export function PlayerView() {
     if (audioEl.paused) {
       try {
         await audioEl.play();
+        setIsPlaying(true);
       } catch (e) { }
     } else {
       audioEl.pause();
+      setIsPlaying(false);
     }
+  };
+
+  const seekBy = (delta: number) => {
+    const el = document.getElementById("global-audio") as HTMLAudioElement;
+    if (!el || !Number.isFinite(el.duration)) return;
+    el.currentTime = Math.max(0, Math.min(el.duration, el.currentTime + delta));
+  };
+
+  const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const el = document.getElementById("global-audio") as HTMLAudioElement;
+    if (!el || !Number.isFinite(el.duration)) return;
+    const val = Number(e.target.value);
+    el.currentTime = (val / 1000) * el.duration;
   };
 
   useEffect(() => {
@@ -125,20 +142,24 @@ export function PlayerView() {
     const onPlay = () => setIsPlaying(true);
     const onPause = () => setIsPlaying(false);
     const onTimeUpdate = (e: Event) => setCurrentTime((e.currentTarget as HTMLAudioElement).currentTime);
+    const onLoadedMeta = (e: Event) => setDuration((e.currentTarget as HTMLAudioElement).duration);
 
     audioEl.addEventListener('play', onPlay);
     audioEl.addEventListener('pause', onPause);
     audioEl.addEventListener('ended', onPause);
     audioEl.addEventListener('timeupdate', onTimeUpdate);
+    audioEl.addEventListener('loadedmetadata', onLoadedMeta);
 
     setIsPlaying(!audioEl.paused);
     setCurrentTime(audioEl.currentTime);
+    setDuration(audioEl.duration || 0);
 
     return () => {
       audioEl.removeEventListener('play', onPlay);
       audioEl.removeEventListener('pause', onPause);
       audioEl.removeEventListener('ended', onPause);
       audioEl.removeEventListener('timeupdate', onTimeUpdate);
+      audioEl.removeEventListener('loadedmetadata', onLoadedMeta);
     };
   }, [song?.url]);
 
@@ -146,14 +167,12 @@ export function PlayerView() {
 
   const currentSegment = currentSegmentIndex >= 0 ? segments[currentSegmentIndex] : null;
 
-  // --- Hand-drawn Lyric Renderer ---
   const renderDrawnText = (isTranslation: boolean) => {
     if (!currentSegment) {
       if (isTranslation) return null;
       if (segments.length > 0) {
         const upcoming = segments.find(s => s.start >= currentTime);
-        // Floating dot prompt before lyrics
-        return <span className="word-write text-ink-graphite-light">{upcoming ? ". . ." : ""}</span>;
+        return <span className="word-write text-ink-graphite-light">{upcoming ? "( Instrumental )" : "End of page"}</span>;
       }
       return <span className="word-write text-ink-graphite">{cleanTitle(song?.name || "")}</span>;
     }
@@ -163,7 +182,6 @@ export function PlayerView() {
       ? (currentSegment.translation || currentSegment.secondary || "")
       : currentSegment.primary;
 
-    // Fallback or Translation Line Renderer
     if (!words.length || isTranslation) {
       const strWords = sourceString.split(" ");
       if (!strWords.length || !strWords[0]) return null;
@@ -174,7 +192,7 @@ export function PlayerView() {
       return strWords.map((wordStr: string, i: number) => {
         const fakedStart = currentSegment.start + (i * timePerWord);
         const hasStarted = currentTime >= fakedStart;
-        const eraseOffset = isTranslation ? 0.1 : 0.4;
+        const eraseOffset = isTranslation ? 0.1 : 0.3;
         const isErasing = currentTime > currentSegment.end + eraseOffset;
 
         let className = "word-hidden";
@@ -189,12 +207,11 @@ export function PlayerView() {
       });
     }
 
-    // Precise Timing Renderer
     return words.map((w: any, i: number) => {
       const start = Number(w.start);
       const text = w.text || w.word || "";
       const hasStarted = currentTime >= start;
-      const isErasing = currentTime > currentSegment.end + 0.4;
+      const isErasing = currentTime > currentSegment.end + 0.3;
 
       let className = "word-hidden";
       if (hasStarted && !isErasing) className = "word-write";
@@ -209,46 +226,50 @@ export function PlayerView() {
   };
 
   return (
-    // The entire stage acts as an invisible play/pause button
     <section
       className="player-view fixed inset-0 z-30 bg-transparent min-h-[100svh] overflow-hidden cursor-pointer"
       aria-label="Visualizer player"
       onClick={togglePlay}
     >
 
-      {/* Global Grain Overlay pushes ink INTO paper */}
       <div className="paper-grain-overlay pointer-events-none"></div>
 
-      {/* Back Button escapes the invisible play/pause overlay via stopPropagation */}
-      <button
-        className="player-back fixed top-6 right-6 z-50 bg-transparent border-none cursor-pointer font-display text-[1.5rem] font-bold text-ink-red hover:scale-110 transition-transform"
-        onClick={closePlayer}
-      >
+      <button className="player-back fixed top-5 right-5 z-50 bg-transparent border-none cursor-pointer font-display text-[1.5rem] font-bold text-ink-red hover:scale-110 transition-transform" onClick={closePlayer}>
         <span aria-hidden="true">&lt; Lib</span>
       </button>
 
       <div className="stage-shell w-full h-[100svh] grid place-items-stretch" aria-label="Visualizer stage">
-        <section className="stage relative w-full h-[100svh] pointer-events-none">
+        <section className="stage relative w-full h-[100svh] pointer-events-none" tabIndex={0}>
 
-          {/* Main Weather Engine Canvas */}
           <canvas id="visualizer-canvas" className="absolute inset-0 z-[2] w-full h-full"></canvas>
 
-          {/* Perspective Container for 3D Lyrics and Shadows */}
           <div
-            className="lyric-wrap flex flex-col items-center text-center absolute w-full z-20"
+            className="stage-meta absolute z-10 top-[30px] flex justify-between pointer-events-none opacity-40 mix-blend-multiply"
             style={{
-              perspective: "1000px",
-              bottom: "20vh", // Positioned to look good on portrait phones
-              padding: "0 max(24px, 5vw)"
+              left: "calc(max(50px, 4vw) + max(24px, 5vw))",
+              right: "max(24px, 5vw)"
             }}
           >
-            {/* Primary Text (The Umbrella) */}
-            <div className="lyric-primary max-w-[min(1000px,100%)] font-display text-[clamp(2.5rem,7vw,5.5rem)] font-bold leading-[1.05] text-ink-graphite whitespace-normal break-words drop-shadow-sm">
+            <span className="font-display text-[2rem] text-ink-graphite truncate max-w-[50%]">{song?.name || "Choose a song"}</span>
+            <span className="font-display text-[2rem] text-ink-blueprint ml-2">{formatPreciseClock(currentTime)}</span>
+          </div>
+
+          <div
+            className="lyric-wrap absolute flex flex-col items-center text-center z-20 pointer-events-none"
+            style={{
+              perspective: "1000px",
+              top: "40vh", // Push it slightly up so ocean has plenty of room below
+              left: "calc(max(50px, 4vw) + max(24px, 5vw))",
+              right: "max(24px, 5vw)"
+            }}
+          >
+            {/* Primary Text: Controls the visualizer's engine Horizon line naturally */}
+            <div className="lyric-primary relative z-20 max-w-[min(1000px,100%)] font-display text-[clamp(2.5rem,5vw,5.5rem)] font-bold leading-[1.05] text-ink-graphite whitespace-normal break-words drop-shadow-sm">
               {renderDrawnText(false)}
             </div>
 
-            {/* 3D Cast Shadow Translation */}
-            <div className="translation-wrap max-w-[min(1000px,100%)] font-display font-bold text-[clamp(2.2rem,5vw,4rem)] leading-[1.05] whitespace-normal break-words mt-3">
+            {/* 3D Cast Shadow Translation (Rippling on the ocean surface, target for rain drops) */}
+            <div className="translation-wrap absolute top-[100%] z-10 max-w-[min(1000px,100%)] font-display font-bold text-[clamp(2.2rem,4vw,4rem)] leading-[1.05] whitespace-normal break-words mt-[15px]">
               {renderDrawnText(true)}
             </div>
           </div>
@@ -256,11 +277,11 @@ export function PlayerView() {
         </section>
       </div>
 
-      {/* Tiny Pause/Play indicator (Fades out when playing) */}
+      {/* Giant Play/Pause indicator that gracefully fades out */}
       <div
         className={`absolute inset-0 grid place-items-center pointer-events-none transition-opacity duration-700 ${isPlaying ? 'opacity-0' : 'opacity-100'}`}
       >
-        <div className="font-display text-ink-graphite-light text-[6rem] opacity-50" style={{ filter: 'blur(2px)' }}>
+        <div className="font-display text-ink-graphite-light text-[6rem] opacity-40 mix-blend-multiply" style={{ filter: 'blur(3px)' }}>
           II
         </div>
       </div>
