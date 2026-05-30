@@ -5,7 +5,7 @@ import { LibraryView } from "./components/LibraryView";
 import { PlayerView } from "./components/PlayerView";
 import { getDroppedFiles } from "./lib/fileSystem";
 import { handleGlobalDroppedFiles } from "./lib/fileHandlers";
-import { restorePersistedLibrary, persistLibrary } from "./lib/persistence";
+import { restorePersistedLibrary, persistLibrary, loadSettings, saveSettings } from "./lib/persistence";
 
 export default function App() {
   const view = useStore((s) => s.view);
@@ -15,13 +15,24 @@ export default function App() {
     const engine = new GraphiteDesignSystem();
     engine.init();
     
-    // Restore saved library state
+    useStore.setState(loadSettings());
     restorePersistedLibrary();
 
     const unsub = useStore.subscribe((state, prevState) => {
       if (state.audioFiles !== prevState.audioFiles) {
-        // Debounce slightly or just call
         persistLibrary().catch(console.error);
+      }
+
+      if (
+        state.elevenLabsApiKey !== prevState.elevenLabsApiKey ||
+        state.saveElevenLabsKey !== prevState.saveElevenLabsKey ||
+        state.sourceLanguage !== prevState.sourceLanguage ||
+        state.targetLanguage !== prevState.targetLanguage ||
+        state.translationEnabled !== prevState.translationEnabled ||
+        state.googleTranslateApiKey !== prevState.googleTranslateApiKey ||
+        state.saveGoogleTranslateKey !== prevState.saveGoogleTranslateKey
+      ) {
+        saveSettings(state);
       }
     });
 
@@ -85,7 +96,7 @@ export default function App() {
         <div className="fixed inset-0 z-[100] grid place-items-center bg-black/60 backdrop-blur-sm pointer-events-none">
           <div className="w-[min(400px,90vw)] min-h-[200px] p-8 grid place-items-center text-center bg-transparent drop-card-fx rounded-xl border-2 border-dashed border-ink-blueprint">
             <strong className="font-display text-[3rem] text-ink-blueprint">Drop files</strong>
-            <span className="text-ink-paper font-body text-xl">Audio, guide, timing, or a folder</span>
+            <span className="text-ink-paper font-body text-xl">Audio, timing, or a folder</span>
           </div>
         </div>
       )}

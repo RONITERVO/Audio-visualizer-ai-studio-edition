@@ -12,7 +12,6 @@ export interface SongFile {
   folderLabel: string;
   fileHandleId: string;
   fileLabel: string;
-  guide: TranscriptItem | null;
   timing: TranscriptItem | null;
   recoveryStatus: string;
   needsRecovery: boolean;
@@ -32,9 +31,8 @@ export interface TranscriptItem {
   persistedId: string;
   textCache: string;
   updatedAt: number;
-  kind?: "guide" | "timed";
+  kind?: "timed";
   title?: string;
-  slotKind?: string;
 }
 
 export interface Segment {
@@ -48,6 +46,11 @@ export interface Segment {
   speaker: string;
   section: string;
   role: string;
+  kind?: string;
   words: any[];
+  characterTimeline?: any[];
   order: number;
+  source?: string;
+  translationSource?: string;
+  language_code?: string;
 }

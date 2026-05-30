@@ -1,6 +1,6 @@
 {
   "name": "Living Sketchbook Music",
-  "description": "A standalone browser music visualizer for local audio, per-song lyric guides, and per-song timing data.",
+  "description": "A local music visualizer that generates synced bilingual lyrics with ElevenLabs Scribe and Google Translate.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }

@@ -2,7 +2,6 @@ import { useStore, GlobalState } from "./store";
 import { AUDIO_EXTENSIONS, TRANSCRIPT_EXTENSIONS } from "./fileSystem";
 import { getExtension, getBaseName, getAudioMimeType, getFileRelativePath, getTopFolderName, createId, getSongFileKey } from "./utils";
 import { parseTranscript } from "./parser";
-import { mergeGuideWithTiming } from "./merger";
 
 export async function handleGlobalDroppedFiles(files: File[]) {
     const audioFiles: File[] = [];
@@ -55,7 +54,6 @@ function createSongFromFile(file: File, options: any = {}) {
         folderLabel: getTopFolderName(relativePath),
         fileHandleId: "",
         fileLabel: file.name,
-        guide: null,
         timing: null,
         recoveryStatus: "",
         needsRecovery: false,
@@ -152,15 +150,13 @@ function findSongForTextItem(item: any, preferSongs: any[]) {
 
 function applyTextItemToSong(song: any, item: any) {
     const state = useStore.getState();
-    const slot = item.kind === "timed" || item.kind === "timing" ? "timing" : "guide";
-    item.slotKind = slot;
+    item.kind = "timed";
     
-    // Update the song object inside the state
     const newAudioFiles = state.audioFiles.map(s => {
         if (s.id === song.id) {
             return {
                 ...s,
-                [slot]: item,
+                timing: item,
                 recoveryStatus: ""
             }
         }
@@ -191,24 +187,14 @@ export async function loadSongSegments(songId: string) {
     const song = state.audioFiles.find(s => s.id === songId);
     if (!song) return;
 
-    let guideSegments: any[] = [];
     let timingSegments: any[] = [];
-
-    if (song.guide) {
-        await ensureParsed(song.guide);
-        guideSegments = song.guide.segments || [];
-    }
     
     if (song.timing) {
         await ensureParsed(song.timing);
         timingSegments = song.timing.segments || [];
     }
 
-    let finalSegments = timingSegments.length ? timingSegments : guideSegments;
-
-    if (timingSegments.length && guideSegments.length) {
-        finalSegments = mergeGuideWithTiming(guideSegments, timingSegments);
-    }
+    let finalSegments = timingSegments;
 
     // Distribute untimed segments
     let cursor = 0;

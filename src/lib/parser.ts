@@ -1,9 +1,9 @@
-import { createId, getExtension, looksLikeJson, looksLikeLooseJson } from "./utils";
+import { createId, looksLikeJson, looksLikeLooseJson } from "./utils";
 import { Segment } from "../types";
 
-export function parseTranscript(text: string, extension: string): { kind: "guide" | "timed", title?: string, segments: Segment[] } {
+export function parseTranscript(text: string, extension: string): { kind: "timed", title?: string, segments: Segment[] } {
   const trimmed = text.trim(); 
-  if (!trimmed) return { kind: "guide", segments: [] };
+  if (!trimmed) return { kind: "timed", segments: [] };
   
   if (extension === "json" || looksLikeJson(trimmed) || looksLikeLooseJson(trimmed)) {
       return parseJsonTranscript(trimmed);
@@ -17,13 +17,8 @@ export function parseTranscript(text: string, extension: string): { kind: "guide
   
   const looseTimed = parseLooseTimedText(trimmed); 
   if (looseTimed.length) return { kind: "timed", segments: normalizeSegments(looseTimed) };
-  
-  const guide = parseSunoLyricGuide(trimmed);
-  if (guide.segments.length >= 2 || (["txt", "text", "lyrics"].includes(extension) && guide.segments.length)) {
-      return { kind: "guide", title: guide.title, segments: normalizeSegments(guide.segments) };
-  }
-  
-  return { kind: "guide", segments: parsePlainText(trimmed) };
+
+  return { kind: "timed", segments: parsePlainText(trimmed) };
 }
 
 function parseCueTranscript(text: string): Segment[] {
@@ -59,17 +54,33 @@ function parseJsonTranscript(text: string) {
 
     const segments = Array.isArray(data) ? data : data.segments || data.transcript || data.captions || [];
     if (segments.length) {
-        const parsed = segments.map((item: any) => ({
+        const parsed = segments.map((item: any, index: number) => {
+          const text = item.text || item.primary || item.content || item.lyric || item.raw || "";
+          return {
+            id: item.id,
             start: item.start ?? item.startTime ?? item.start_time,
             end: item.end ?? item.endTime ?? item.end_time,
-            text: item.text || item.content || item.lyric,
-            raw: item.text || item.content || item.lyric,
-            role: item.kind || item.role || ""
-        }));
+            text,
+            raw: item.raw || text,
+            primary: item.primary || text,
+            translation: item.translation || item.secondary || "",
+            secondary: item.secondary || "",
+            speaker: item.speaker || "",
+            section: item.section || "",
+            role: item.role || item.kind || "lyric",
+            kind: item.kind || item.role || "lyric",
+            words: Array.isArray(item.words) ? item.words : [],
+            characterTimeline: Array.isArray(item.characterTimeline) ? item.characterTimeline : [],
+            order: item.order ?? index,
+            source: item.source || data.source || data.transcriptionSource || "",
+            translationSource: item.translationSource || data.translationSource || "",
+            language_code: item.language_code || data.language_code || ""
+          };
+        });
         return { kind: "timed" as any, segments: normalizeSegments(parsed) };
     }
     
-    return { kind: "guide" as any, segments: parsePlainText(data.text || data.transcript || "") };
+    return { kind: "timed" as any, segments: parsePlainText(data.text || data.transcript || "") };
 }
 
 function parseLooseTimedText(text: string) {
@@ -94,81 +105,6 @@ function parseLooseTimedText(text: string) {
     return segments.length >= 2 ? segments : [];
 }
 
-function parseSunoLyricGuide(text: string) {
-    const lines = text.replace(/\r/g, "").split("\n"); 
-    const segments: any[] = []; 
-    let title = ""; 
-    let section = ""; 
-    let order = 0;
-    
-    for (const rawLine of lines) {
-      const line = rawLine.trim(); 
-      if (!line || /^```/i.test(line) || /^(code|text)$/i.test(line)) continue;
-      
-      const metaLine = line.replace(/^#{1,6}\s*/, "").replace(/\*\*/g, "").trim();
-      const trackTitle = metaLine.match(/^track\s+\d+\s*:\s*(.+)$/i);
-      if (trackTitle && !title) { title = trackTitle[1].trim(); continue; }
-      if (/^(concept|styles?)\s*:/i.test(metaLine)) continue;
-      
-      const sectionMatch = metaLine.match(/^\[([^\]]+)\]$/);
-      if (sectionMatch) { section = sectionMatch[1].trim(); continue; }
-      
-      const parsed = parseGuideLyricLine(metaLine);
-      if (!parsed) continue;
-
-      segments.push({ 
-          start: NaN, 
-          end: NaN, 
-          text: metaLine, 
-          raw: metaLine,
-          primary: parsed.primary,
-          translation: parsed.translation,
-          secondary: parsed.secondary,
-          section, 
-          role: parsed.role, 
-          order 
-      });
-      order += 1;
-    }
-    return { title, segments };
-}
-
-function parseGuideLyricLine(line: string) {
-    if (/^```/i.test(line) || /^#{1,6}\s+/.test(line)) return null;
-    if (/^\[[^\]]+\]$/.test(line)) return null;
-    if (/^(track\s+\d+\s*:|concept\s*:|styles?\s*:)/i.test(line)) return null;
-
-    const adlib = line.match(/^\(([^)]+)\)$/);
-    if (adlib) {
-      return {
-        primary: stripTrailingDots(adlib[1].trim()),
-        translation: "",
-        secondary: "",
-        role: "adlib"
-      };
-    }
-
-    const paired = line.match(/^(.+?)\s*\(([^)]+)\)\s*$/);
-    if (paired) {
-      return {
-        primary: paired[1].trim(),
-        translation: stripTranslationMarks(paired[2]),
-        secondary: "",
-        role: "lyric"
-      };
-    }
-
-    if (/^[^\w\u00c0-\u024f\u3400-\u9fff]*$/.test(line)) return null;
-    if (/^\[.+\]$/.test(line)) return null;
-
-    return {
-      primary: stripTrailingDots(line),
-      translation: "",
-      secondary: "",
-      role: "lyric"
-    };
-}
-
 function parsePlainText(text: string) {
     const lines = text.split(/\n+/).map((line, index) => ({ start: NaN, end: NaN, text: line.trim(), raw: line.trim(), order: index })).filter(s => s.text);
     return normalizeSegments(lines);
@@ -177,19 +113,26 @@ function parsePlainText(text: string) {
 function normalizeSegments(rawSegments: any[]): Segment[] {
     const segments = rawSegments.map((seg, i) => {
         const split = splitBilingualText(seg.text || seg.raw || "");
+        const start = Number(seg.start);
+        const end = Number(seg.end);
         return {
-            id: createId("seg"),
-            start: Number.isFinite(seg.start) ? Number(seg.start) : NaN,
-            end: Number.isFinite(seg.end) ? Number(seg.end) : NaN,
+            id: seg.id || createId("seg"),
+            start: Number.isFinite(start) ? start : NaN,
+            end: Number.isFinite(end) ? end : NaN,
             primary: seg.primary || split.primary || seg.text || "",
             translation: seg.translation || split.translation || "",
             secondary: seg.secondary || split.secondary || "",
             raw: seg.raw || seg.text || "",
             speaker: seg.speaker || "",
             section: seg.section || "",
-            role: seg.role || "lyric",
-            words: seg.words || [],
-            order: seg.order ?? i
+            role: seg.role || seg.kind || "lyric",
+            kind: seg.kind || seg.role || "lyric",
+            words: Array.isArray(seg.words) ? seg.words : [],
+            characterTimeline: Array.isArray(seg.characterTimeline) ? seg.characterTimeline : [],
+            order: seg.order ?? i,
+            source: seg.source || "",
+            translationSource: seg.translationSource || "",
+            language_code: seg.language_code || ""
         };
     }).filter((s) => s.primary || s.translation || s.raw)
       .sort((a, b) => {
